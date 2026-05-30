@@ -46,15 +46,9 @@ jobs:
       - name: Apply ElshemyPXE configuration
         run: |
           mkdir -p ipxe/src/config/local
-          # general.h: enable extra features only
-          printf '/* ElshemyPXE Custom Build */\n' > ipxe/src/config/local/general.h
-          # branding.h: override product name (must undef first to avoid redefinition error)
-          printf '#undef PRODUCT_NAME\n#define PRODUCT_NAME "%s"\n#undef PRODUCT_SHORT_NAME\n#define PRODUCT_SHORT_NAME "EPXE"\n' \
-            "${{ github.event.inputs.product_name }}" \
-            > ipxe/src/config/local/branding.h
-          echo "=== general.h ===" && cat ipxe/src/config/local/general.h
-          echo "=== branding.h ===" && cat ipxe/src/config/local/branding.h
           dos2unix embed.ipxe
+          echo "embed.ipxe ready"
+          ls -la ipxe/src/config/local/
 
       # ── 5. Build EFI files ───────────────────────────────
       - name: Build ipxe.efi (full drivers)
