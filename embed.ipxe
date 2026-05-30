@@ -1,0 +1,22 @@
+#!ipxe
+# ElshemyPXE — CCBoot Compatible Boot Script
+
+# Open network interface
+ifopen net0 && goto start ||
+
+:dhcp_loop
+dhcp net0 || goto dhcp_loop
+
+:start
+# Try CCBoot server (HTTP port 9002)
+chain http://${next-server}:9002/pxe?platform=${platform}&ip=${ip}&password=${password}&pxe253=${253:hex}&pxe64=${67}&hostname=${12:string}&ccboot=${ccboot-multi-boot-timeout} ||
+
+# Fallback: autoexec via TFTP
+chain tftp://${next-server}/${filename}_autoexec ||
+
+# Fallback: newip.cfg
+chain tftp://${next-server}/newip.cfg ||
+
+echo Boot failed. Retrying in 5s...
+sleep 5
+goto dhcp_loop

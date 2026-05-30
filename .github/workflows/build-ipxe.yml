@@ -1,0 +1,176 @@
+name: Build ElshemyPXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_name:
+        description: 'Product Name (shown in boot)'
+        required: true
+        default: 'ElshemyPXE'
+      cert_country:
+        description: 'Certificate Country Code'
+        required: true
+        default: 'EG'
+      cert_org:
+        description: 'Certificate Organization'
+        required: true
+        default: 'Elshemy'
+      cert_days:
+        description: 'Certificate validity (days)'
+        required: true
+        default: '3650'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Install build tools ───────────────────────────
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential \
+            liblzma-dev \
+            gcc \
+            binutils \
+            make \
+            perl \
+            git \
+            openssl \
+            sbsigntool
+
+      # ── 2. Checkout this repo ────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 3. Clone iPXE ────────────────────────────────────
+      - name: Clone iPXE source
+        run: git clone --depth=1 https://github.com/ipxe/ipxe.git
+
+      # ── 4. Apply custom config ───────────────────────────
+      - name: Apply ElshemyPXE configuration
+        run: |
+          mkdir -p ipxe/src/config/local
+          cat > ipxe/src/config/local/general.h << EOF
+          /* ElshemyPXE Custom Build */
+          #define PRODUCT_NAME       "${{ github.event.inputs.product_name }}"
+          #define PRODUCT_SHORT_NAME "EPXE"
+          EOF
+          echo "Config applied: ${{ github.event.inputs.product_name }}"
+
+      # ── 5. Build EFI files ───────────────────────────────
+      - name: Build ipxe.efi (full drivers)
+        run: |
+          cd ipxe/src
+          make bin-x86_64-efi/ipxe.efi \
+               EMBED=../../embed.ipxe \
+               -j$(nproc) 2>&1 | grep -E '^\s+(CC|LD|OBJCOPY|BUILDINFO)|^Error' || true
+
+      - name: Build snponly.efi (firmware NIC driver)
+        run: |
+          cd ipxe/src
+          make bin-x86_64-efi/snponly.efi \
+               EMBED=../../embed.ipxe \
+               -j$(nproc) 2>&1 | grep -E '^\s+(CC|LD|OBJCOPY|BUILDINFO)|^Error' || true
+
+      # ── 6. Generate certificate ──────────────────────────
+      - name: Generate Secure Boot certificate
+        run: |
+          mkdir -p cert-output
+
+          # OpenSSL config with UEFI code signing extensions
+          cat > cert.cnf << 'EOF'
+          [req]
+          distinguished_name = dn
+          x509_extensions    = v3_uefi
+          prompt             = no
+
+          [dn]
+          C  = ${{ github.event.inputs.cert_country }}
+          O  = ${{ github.event.inputs.cert_org }}
+          CN = ${{ github.event.inputs.product_name }} Secure Boot
+
+          [v3_uefi]
+          subjectKeyIdentifier   = hash
+          authorityKeyIdentifier = keyid:always
+          basicConstraints       = critical,CA:FALSE
+          keyUsage               = critical,digitalSignature
+          extendedKeyUsage       = 1.3.6.1.4.1.311.10.3.6
+          EOF
+
+          # Generate private key (2048-bit RSA)
+          openssl genrsa -out cert-output/ElshemyPXE.key 2048 2>/dev/null
+
+          # Generate self-signed certificate
+          openssl req -new -x509 \
+            -key cert-output/ElshemyPXE.key \
+            -out cert-output/ElshemyPXE.crt \
+            -days ${{ github.event.inputs.cert_days }} \
+            -config cert.cnf 2>/dev/null
+
+          # Export in all BIOS-compatible formats
+          openssl x509 -in cert-output/ElshemyPXE.crt \
+            -outform DER -out cert-output/ElshemyPXE.cer       # ASUS / MSI / Gigabyte / ASRock
+          cp cert-output/ElshemyPXE.crt cert-output/ElshemyPXE.pem  # Lenovo / old boards
+
+          # Show certificate info
+          echo ""
+          echo "Certificate info:"
+          openssl x509 -in cert-output/ElshemyPXE.crt -noout -subject -dates
+
+      # ── 7. Sign EFI files ────────────────────────────────
+      - name: Sign EFI files
+        run: |
+          mkdir -p signed-output
+
+          sbsign \
+            --key cert-output/ElshemyPXE.key \
+            --cert cert-output/ElshemyPXE.crt \
+            --output signed-output/ElshemyPXe.efi \
+            ipxe/src/bin-x86_64-efi/ipxe.efi
+
+          sbsign \
+            --key cert-output/ElshemyPXE.key \
+            --cert cert-output/ElshemyPXE.crt \
+            --output signed-output/ElshemyPXe-snponly.efi \
+            ipxe/src/bin-x86_64-efi/snponly.efi
+
+          # Verify signatures
+          echo "Verifying signatures..."
+          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe.efi
+          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe-snponly.efi
+
+          # Copy certs to signed-output
+          cp cert-output/ElshemyPXE.cer  signed-output/
+          cp cert-output/ElshemyPXE.pem  signed-output/
+          cp cert-output/ElshemyPXE.crt  signed-output/
+
+          echo ""
+          echo "Output files:"
+          ls -lh signed-output/
+
+      # ── 8. Upload artifacts ──────────────────────────────
+      - name: Upload EFI files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ElshemyPXE-Boot-Files
+          path: signed-output/
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          echo "## Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Purpose |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXe.efi\` | Main boot file — most boards |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXe-snponly.efi\` | New boards with unrecognized NICs |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXE.cer\` | Certificate for BIOS — ASUS/MSI/Gigabyte/ASRock |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXE.pem\` | Certificate for BIOS — Lenovo/old boards |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### How to import certificate in BIOS" >> $GITHUB_STEP_SUMMARY
+          echo "1. Copy \`ElshemyPXE.cer\` to USB (FAT32)" >> $GITHUB_STEP_SUMMARY
+          echo "2. BIOS → Secure Boot → Key Management → Authorized Signatures (DB) → Append" >> $GITHUB_STEP_SUMMARY
+          echo "3. Select the .cer file from USB" >> $GITHUB_STEP_SUMMARY
