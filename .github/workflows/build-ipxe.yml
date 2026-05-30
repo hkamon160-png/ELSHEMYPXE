@@ -79,9 +79,8 @@ jobs:
             echo ''
             echo '[v3_uefi]'
             echo 'subjectKeyIdentifier = hash'
-            echo 'basicConstraints     = critical,CA:FALSE'
-            echo 'keyUsage             = critical,digitalSignature'
-            echo 'extendedKeyUsage     = 1.3.6.1.4.1.311.10.3.6'
+            echo 'basicConstraints     = CA:FALSE'
+            echo 'keyUsage             = digitalSignature'
           } > cert.cnf
           openssl genrsa -out cert-output/ElshemyPXE.key 2048 2>/dev/null
           openssl req -new -x509 \
