@@ -60,7 +60,8 @@ jobs:
       - name: Build ipxe.efi (full drivers)
         run: |
           cd ipxe/src
-          make bin-x86_64-efi/ipxe.efi EMBED=../../embed.ipxe -j$(nproc) 2>&1 | tee /tmp/build.log; test ${PIPESTATUS[0]} -eq 0 || (echo "=== FULL BUILD LOG ===" && cat /tmp/build.log && exit 1)
+          echo "GCC: $(gcc --version | head -1)"
+          make bin-x86_64-efi/ipxe.efi EMBED=../../embed.ipxe -j1
 
       - name: Build snponly.efi (firmware NIC driver)
         run: |
