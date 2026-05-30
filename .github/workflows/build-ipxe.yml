@@ -121,19 +121,25 @@ EOF
         run: |
           mkdir -p signed-output
 
+          echo "=== EFI files ==="
+          ls -lh ipxe/src/bin-x86_64-efi/ipxe.efi ipxe/src/bin-x86_64-efi/snponly.efi
+          file ipxe/src/bin-x86_64-efi/ipxe.efi
+
+          echo "=== Signing ipxe.efi ==="
           sbsign \
             --key cert-output/ElshemyPXE.key \
             --cert cert-output/ElshemyPXE.crt \
             --output signed-output/ElshemyPXe.efi \
             ipxe/src/bin-x86_64-efi/ipxe.efi
 
+          echo "=== Signing snponly.efi ==="
           sbsign \
             --key cert-output/ElshemyPXE.key \
             --cert cert-output/ElshemyPXE.crt \
             --output signed-output/ElshemyPXe-snponly.efi \
             ipxe/src/bin-x86_64-efi/snponly.efi
 
-          echo "Verifying signatures..."
+          echo "=== Verifying ==="
           sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe.efi
           sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe-snponly.efi
 
@@ -141,7 +147,7 @@ EOF
           cp cert-output/ElshemyPXE.pem  signed-output/
           cp cert-output/ElshemyPXE.crt  signed-output/
 
-          echo "Output files:"
+          echo "=== Output files ==="
           ls -lh signed-output/
 
       # ── 8. Upload artifacts ──────────────────────────────
