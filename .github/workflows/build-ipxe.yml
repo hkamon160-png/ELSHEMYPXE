@@ -30,7 +30,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential liblzma-dev gcc binutils make perl git openssl sbsigntool
+          sudo apt-get install -y \
+            build-essential liblzma-dev gcc binutils make perl git \
+            openssl sbsigntool mtools dos2unix xz-utils
 
       # ── 2. Checkout this repo ────────────────────────────
       - name: Checkout
@@ -48,12 +50,17 @@ jobs:
             "${{ github.event.inputs.product_name }}" \
             > ipxe/src/config/local/general.h
           cat ipxe/src/config/local/general.h
+          dos2unix embed.ipxe
+          echo "=== embed.ipxe ==="
+          cat embed.ipxe
+          echo "gcc version: $(gcc --version | head -1)"
+          echo "ld version: $(ld --version | head -1)"
 
       # ── 5. Build EFI files ───────────────────────────────
       - name: Build ipxe.efi (full drivers)
         run: |
           cd ipxe/src
-          make bin-x86_64-efi/ipxe.efi EMBED=../../embed.ipxe -j$(nproc)
+          make bin-x86_64-efi/ipxe.efi EMBED=../../embed.ipxe -j$(nproc) 2>&1 | tee /tmp/build.log; test ${PIPESTATUS[0]} -eq 0 || (echo "=== FULL BUILD LOG ===" && cat /tmp/build.log && exit 1)
 
       - name: Build snponly.efi (firmware NIC driver)
         run: |
