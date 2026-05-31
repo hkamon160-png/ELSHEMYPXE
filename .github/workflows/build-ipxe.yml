@@ -32,7 +32,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential liblzma-dev gcc binutils make perl git \
-            openssl sbsigntool mtools dos2unix xz-utils
+            openssl sbsigntool mtools dos2unix xz-utils shim-signed
 
       # ── 2. Checkout this repo ────────────────────────────
       - name: Checkout
@@ -48,13 +48,11 @@ jobs:
           mkdir -p ipxe/src/config/local
           dos2unix embed.ipxe
           echo "embed.ipxe ready"
-          ls -la ipxe/src/config/local/
 
       # ── 5. Build EFI files ───────────────────────────────
       - name: Build ipxe.efi (full drivers)
         run: |
           cd ipxe/src
-          echo "GCC: $(gcc --version | head -1)"
           make bin-x86_64-efi/ipxe.efi EMBED=../../embed.ipxe -j1
 
       - name: Build snponly.efi (firmware NIC driver)
@@ -97,44 +95,90 @@ jobs:
       - name: Sign EFI files
         run: |
           mkdir -p signed-output
-          echo "=== EFI files ==="
-          ls -lh ipxe/src/bin-x86_64-efi/ipxe.efi ipxe/src/bin-x86_64-efi/snponly.efi
-          file ipxe/src/bin-x86_64-efi/ipxe.efi
-          echo "=== Signing ipxe.efi ==="
           sbsign \
             --key cert-output/ElshemyPXE.key \
             --cert cert-output/ElshemyPXE.crt \
             --output signed-output/ElshemyPXe.efi \
             ipxe/src/bin-x86_64-efi/ipxe.efi
-          echo "=== Signing snponly.efi ==="
           sbsign \
             --key cert-output/ElshemyPXE.key \
             --cert cert-output/ElshemyPXE.crt \
             --output signed-output/ElshemyPXe-snponly.efi \
             ipxe/src/bin-x86_64-efi/snponly.efi
-          echo "=== Verifying (non-fatal) ==="
-          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe.efi && echo "ipxe.efi: OK" || echo "ipxe.efi: verify warning (files still usable)"
-          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe-snponly.efi && echo "snponly.efi: OK" || echo "snponly.efi: verify warning (files still usable)"
+          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe.efi && echo "ipxe.efi: OK" || echo "ipxe.efi: verify warning"
+          sbverify --cert cert-output/ElshemyPXE.crt signed-output/ElshemyPXe-snponly.efi && echo "snponly.efi: OK" || echo "snponly.efi: verify warning"
           cp cert-output/ElshemyPXE.cer signed-output/
           cp cert-output/ElshemyPXE.pem signed-output/
           cp cert-output/ElshemyPXE.crt signed-output/
-          echo "=== Output files ==="
-          ls -lh signed-output/
 
-      # ── 8. Upload artifacts ──────────────────────────────
-      - name: Upload EFI files
+      # ── 8. Add shim (MOK blue screen support) ────────────
+      - name: Add shim for MOK enrollment
+        run: |
+          mkdir -p mok-output
+
+          # Copy Microsoft-signed shim files
+          SHIM_DIR=$(dpkg -L shim-signed | grep shimx64 | head -1 | xargs dirname)
+          echo "Shim dir: $SHIM_DIR"
+          ls -la $SHIM_DIR/
+
+          # shimx64.efi — المحمّل الأساسي (موقّع من Microsoft)
+          find /usr/lib/shim /boot -name "shimx64.efi*" 2>/dev/null | head -5
+          SHIM=$(find /usr/lib/shim /boot -name "shimx64.efi*" ! -name "*.dpkg*" 2>/dev/null | head -1)
+          MM=$(find /usr/lib/shim /boot -name "mmx64.efi*" ! -name "*.dpkg*" 2>/dev/null | head -1)
+
+          echo "Using shim: $SHIM"
+          echo "Using mmx64: $MM"
+
+          cp "$SHIM" mok-output/shimx64.efi
+          cp "$MM"   mok-output/mmx64.efi
+
+          # iPXE يتسمى grubx64.efi — ده اللي shim بيحمّله
+          cp signed-output/ElshemyPXe.efi      mok-output/grubx64.efi
+          cp signed-output/ElshemyPXe-snponly.efi mok-output/grubx64-snponly.efi
+
+          # الشهادة — المستخدم يحطها على USB لتسجيلها من شاشة MOK
+          cp cert-output/ElshemyPXE.cer mok-output/
+          cp cert-output/ElshemyPXE.pem mok-output/
+
+          echo "=== MOK output files ==="
+          ls -lh mok-output/
+
+      # ── 9. Upload artifacts ──────────────────────────────
+      - name: Upload standard EFI files
         uses: actions/upload-artifact@v4
         with:
-          name: ElshemyPXE-Boot-Files
+          name: ElshemyPXE-Standard
           path: signed-output/
+          retention-days: 90
+
+      - name: Upload MOK shim files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ElshemyPXE-MOK-Shim
+          path: mok-output/
           retention-days: 90
 
       - name: Summary
         run: |
           echo "## Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ElshemyPXE-Standard (بدون shim)" >> $GITHUB_STEP_SUMMARY
           echo "| File | Purpose |" >> $GITHUB_STEP_SUMMARY
           echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ElshemyPXe.efi\` | Main boot file |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ElshemyPXe-snponly.efi\` | New boards with unknown NICs |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ElshemyPXE.cer\` | Certificate — ASUS/MSI/Gigabyte/ASRock |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ElshemyPXE.pem\` | Certificate — Lenovo/old boards |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXe.efi\` | ملف البوت الرئيسي |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXe-snponly.efi\` | للبوردات الجديدة |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXE.cer\` | شهادة BIOS |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ElshemyPXE-MOK-Shim (شاشة MOK الزرقاء)" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Purpose |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`shimx64.efi\` | المحمّل — موقّع من Microsoft ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`mmx64.efi\` | شاشة MOK الزرقاء |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`grubx64.efi\` | iPXE (بتاعنا) |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ElshemyPXE.cer\` | حطه على USB للتسجيل |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### خطوات MOK أول مرة" >> $GITHUB_STEP_SUMMARY
+          echo "1. حط \`shimx64.efi\`, \`mmx64.efi\`, \`grubx64.efi\` في الـ TFTP" >> $GITHUB_STEP_SUMMARY
+          echo "2. حط \`ElshemyPXE.cer\` على USB (FAT32)" >> $GITHUB_STEP_SUMMARY
+          echo "3. أول بوت: شاشة زرقاء → Enroll key from disk → اختار الـ .cer" >> $GITHUB_STEP_SUMMARY
+          echo "4. Reboot → من هنا بوت تلقائي بدون أي شاشة" >> $GITHUB_STEP_SUMMARY
